@@ -354,21 +354,21 @@ class Theme:
                 "accent": "#798086",
                 "accent_hover": "#8a9197",
                 "border": "#353535",
-                "input_bg": "#202023",
+                "input_bg": "#2b2f33",
                 "input_fg": "#FFFFFF",
                 "button_bg": "#353535",
                 "button_fg": "#FFFFFF",
                 "tree_bg": "#1B1B1E",
                 "tree_fg": "#FFFFFF",
                 "tree_selected": "#4a4f55",
-                "text_bg": "#202023",
+                "text_bg": "#2b2f33",
                 "text_fg": "#FFFFFF",
                 "scrollbar_bg": "#444444",
                 "scrollbar_trough": "#1B1B1E",
                 "scrollbar_arrow": "#C2BFBB",
                 "header_bg": "#2A2A2D",
                 "header_fg": "#FFFFFF",
-                "field_focus": "#3f4348"
+                "field_focus": "#3a3f45"
             }
         }
 
@@ -1415,6 +1415,23 @@ class Gotcha:
         minutes = (elapsed % 3600) // 60
         seconds = elapsed % 60
         self.custom_time.config(text=f"{hours:02d}:{minutes:02d}:{seconds:02d}")
+
+    def update_vlan_external_stats(self, data):
+        """Обновляет статистику VLAN flood из JSON-сообщений внешнего процесса."""
+        if not self.vlan_attack_running:
+            return
+
+        packets = data.get('packets', 0)
+        pps = data.get('pps', 0)
+        elapsed = data.get('time', 0)
+
+        self.vlan_sent.config(text=f"{packets}")
+        self.vlan_rate.config(text=f"{pps}")
+
+        hours = elapsed // 3600
+        minutes = (elapsed % 3600) // 60
+        seconds = elapsed % 60
+        self.vlan_time.config(text=f"{hours:02d}:{minutes:02d}:{seconds:02d}")
     
     def start_custom_attack(self):
         if self.custom_attack_running:
@@ -1423,6 +1440,9 @@ class Gotcha:
         self.custom_attack_running = True
         self.custom_start_btn.config(state='disabled')
         self.custom_stop_btn.config(state='normal')
+        self.custom_sent.config(text="0")
+        self.custom_rate.config(text="0")
+        self.custom_time.config(text="00:00:00")
         
         try:
             target_ip = self.custom_ip.get()
@@ -1476,7 +1496,8 @@ class Gotcha:
                 self.custom_external_thread = threading.Thread(
                     target=self.run_external_tool,
                     args=(args, self.custom_log, self.custom_stop_event),
-                    kwargs={'infinite': self.external_infinite, 'on_finish': self.on_external_finished},
+                    kwargs={'infinite': self.external_infinite, 'on_finish': self.on_external_finished,
+                            'stats_callback': self.update_external_stats},
                     daemon=True
                 )
                 self.custom_external_thread.start()
@@ -1504,7 +1525,8 @@ class Gotcha:
                 self.custom_external_thread = threading.Thread(
                     target=self.run_external_tool,
                     args=(args, self.custom_log, self.custom_stop_event),
-                    kwargs={'infinite': self.external_infinite, 'on_finish': self.on_external_finished},
+                    kwargs={'infinite': self.external_infinite, 'on_finish': self.on_external_finished,
+                            'stats_callback': self.update_external_stats},
                     daemon=True
                 )
                 self.custom_external_thread.start()
@@ -1532,7 +1554,8 @@ class Gotcha:
                 self.custom_external_thread = threading.Thread(
                     target=self.run_external_tool,
                     args=(args, self.custom_log, self.custom_stop_event),
-                    kwargs={'infinite': self.external_infinite, 'on_finish': self.on_external_finished},
+                    kwargs={'infinite': self.external_infinite, 'on_finish': self.on_external_finished,
+                            'stats_callback': self.update_external_stats},
                     daemon=True
                 )
                 self.custom_external_thread.start()
@@ -2007,6 +2030,9 @@ class Gotcha:
         # Если не random и не указан фикс, то программа сама подхватит MAC интерфейса
         
         self.vlan_log.delete(1.0, tk.END)
+        self.vlan_sent.config(text="0")
+        self.vlan_rate.config(text="0")
+        self.vlan_time.config(text="00:00:00")
         self.vlan_log.insert('end', f"VLAN flood started\n")
         self.vlan_log.insert('end', f"Interface: {interface}\n")
         self.vlan_log.insert('end', f"VLAN ID: {vlan_id}\n")
@@ -2023,7 +2049,8 @@ class Gotcha:
         self.vlan_external_thread = threading.Thread(
             target=self.run_external_tool,
             args=(args, self.vlan_log, self.vlan_stop_event),
-            kwargs={'infinite': (duration == 0), 'on_finish': self.on_vlan_finished},
+            kwargs={'infinite': (duration == 0), 'on_finish': self.on_vlan_finished,
+                    'stats_callback': self.update_vlan_external_stats},
             daemon=True
         )
         self.vlan_external_thread.start()

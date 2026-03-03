@@ -130,6 +130,26 @@ uint16_t checksum(uint16_t *ptr, int len) {
     return ~sum;
 }
 
+
+void stats_thread_func(std::atomic<uint64_t>& total_packets_sent,
+                      std::atomic<bool>& stop_flag,
+                      std::chrono::steady_clock::time_point start_time) {
+    uint64_t last_packets = 0;
+    while (!stop_flag.load(std::memory_order_relaxed)) {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+
+        auto now = std::chrono::steady_clock::now();
+        uint64_t elapsed_sec = std::chrono::duration_cast<std::chrono::seconds>(now - start_time).count();
+        uint64_t current_packets = total_packets_sent.load(std::memory_order_relaxed);
+        uint64_t pps = current_packets - last_packets;
+        last_packets = current_packets;
+
+        std::cout << "{\"type\":\"stats\",\"packets\":" << current_packets
+                  << ",\"pps\":" << pps
+                  << ",\"time\":" << elapsed_sec << "}" << std::endl;
+    }
+}
+
 // ==================== Предварительно собранный пакет ====================
 class PrebuiltPacket {
 public:
@@ -473,6 +493,11 @@ int main(int argc, char* argv[]) {
         workers.emplace_back(&FloodEngine::start, engines.back().get(), core);
     }
 
+    std::thread stats_thread(stats_thread_func,
+                             std::ref(total_packets_sent),
+                             std::ref(stop_flag),
+                             start_time);
+
     // Ожидание по времени или до получения сигнала остановки
     if (duration > 0) {
         std::this_thread::sleep_for(std::chrono::seconds(duration));
@@ -486,6 +511,7 @@ int main(int argc, char* argv[]) {
     for (auto& w : workers) {
         if (w.joinable()) w.join();
     }
+    if (stats_thread.joinable()) stats_thread.join();
 
     auto end_time = std::chrono::steady_clock::now();
     auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
