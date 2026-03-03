@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <ctime>
+#include <cstdio>
 #include <winsock2.h>
 #include <iphlpapi.h>
 #include <windows.h>
@@ -99,6 +100,31 @@ uint16_t checksum(uint16_t *ptr, int len) {
         sum = (sum & 0xFFFF) + (sum >> 16);
     return ~sum;
 }
+
+bool parse_mac_strict(const char* str, uint8_t mac[6]) {
+    unsigned int tmp[6] = {};
+    int consumed = 0;
+    if (sscanf(str, "%2x:%2x:%2x:%2x:%2x:%2x%n",
+               &tmp[0], &tmp[1], &tmp[2], &tmp[3], &tmp[4], &tmp[5], &consumed) != 6) {
+        return false;
+    }
+    if (str[consumed] != '\0') {
+        return false;
+    }
+    for (int i = 0; i < 6; ++i) {
+        mac[i] = static_cast<uint8_t>(tmp[i]);
+    }
+    return true;
+}
+
+void print_mac(const uint8_t mac[6]) {
+    for (int i = 0; i < 6; ++i) {
+        if (i) std::printf(":");
+        std::printf("%02X", mac[i]);
+    }
+    std::printf("\n");
+}
+
 
 // Класс предварительно собранного пакета ARP
 class PrebuiltPacket {
@@ -261,9 +287,9 @@ int main(int argc, char* argv[]) {
         } else if (strcmp(argv[i], "--random-mac") == 0) {
             random_mac = true;
         } else {
-            if (sscanf(argv[i], "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
-                       &dst_mac[0], &dst_mac[1], &dst_mac[2], &dst_mac[3], &dst_mac[4], &dst_mac[5]) == 6) {
-                // OK
+            uint8_t parsed_mac[6] = {};
+            if (parse_mac_strict(argv[i], parsed_mac)) {
+                memcpy(dst_mac, parsed_mac, sizeof(dst_mac));
             } else {
                 std::cerr << "Warning: unknown argument '" << argv[i] << "'\n";
             }
@@ -335,7 +361,7 @@ int main(int argc, char* argv[]) {
 
     std::cout << "Using interface: " << ifname << std::endl;
     std::cout << "Destination MAC: ";
-    for (int i = 0; i < 6; i++) printf("%02X:", dst_mac[i]); printf("\b \n");
+    print_mac(dst_mac);
     std::cout << "Random source IP: " << (random_ip ? "yes" : "no") << "\n";
     std::cout << "Random source MAC: " << (random_mac ? "yes" : "no") << "\n";
 
