@@ -74,8 +74,19 @@ void generate_random_mac(uint8_t* mac) {
 }
 
 bool parse_mac(const char* str, uint8_t* mac) {
-    return sscanf(str, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
-                  &mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]) == 6;
+    unsigned int tmp[6] = {};
+    int consumed = 0;
+    if (sscanf(str, "%2x:%2x:%2x:%2x:%2x:%2x%n",
+               &tmp[0], &tmp[1], &tmp[2], &tmp[3], &tmp[4], &tmp[5], &consumed) != 6) {
+        return false;
+    }
+    if (str[consumed] != '\0') {
+        return false;
+    }
+    for (int i = 0; i < 6; ++i) {
+        mac[i] = static_cast<uint8_t>(tmp[i]);
+    }
+    return true;
 }
 
 // ==================== Поток отправки ====================
@@ -171,13 +182,19 @@ int main(int argc, char* argv[]) {
     for (int i = 5; i < argc; ++i) {
         if (strcmp(argv[i], "--random-mac") == 0) {
             random_mac = true;
-        } else if (strcmp(argv[i], "--src-mac") == 0 && i + 1 < argc) {
+        } else if (strcmp(argv[i], "--src-mac") == 0) {
+            if (i + 1 >= argc) {
+                std::cerr << "Missing value for --src-mac\n";
+                return 1;
+            }
             if (parse_mac(argv[++i], fixed_src_mac)) {
                 fixed_mac_provided = true;
             } else {
                 std::cerr << "Invalid MAC address format. Use xx:xx:xx:xx:xx:xx\n";
                 return 1;
             }
+        } else {
+            std::cerr << "Warning: unknown argument '" << argv[i] << "'\n";
         }
     }
 
