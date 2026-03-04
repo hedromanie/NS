@@ -59,9 +59,12 @@ class RSattack:
             'last_update': 0
         }
         self.udp_data_cache = {}
+        self._monitor_lock = threading.Lock()
+        self._completion_notified = False
         
-    def start_udp_attack(self, target_ip, port, packet_size, duration, continuous, interface, app_log):
+    def start_udp_attack(self, target_ip, port, packet_size, duration, continuous, interface, app_log, on_complete=None):
         self.running = True
+        self._completion_notified = False
         self.stats = {
             'total_sent': 0,
             'current_pps': 0,
@@ -100,6 +103,7 @@ class RSattack:
         app_log(f"Target: {target_ip}:{port}")
         app_log(f"Interface: {interface} (src_ip: {source_ip})")
         
+        worker_threads = []
         for i in range(num_threads):
             thread = threading.Thread(
                 target=self._udp_raw_worker,
@@ -109,12 +113,34 @@ class RSattack:
             )
             thread.start()
             self.threads.append(thread)
+            worker_threads.append(thread)
         
         stats_thread = threading.Thread(target=self._stats_worker, daemon=True)
         stats_thread.start()
         self.threads.append(stats_thread)
+
+        monitor_thread = threading.Thread(
+            target=self._monitor_udp_workers,
+            args=(worker_threads, on_complete),
+            daemon=True
+        )
+        monitor_thread.start()
+        self.threads.append(monitor_thread)
         
         return True
+
+    def _monitor_udp_workers(self, worker_threads, on_complete=None):
+        for thread in worker_threads:
+            thread.join()
+
+        with self._monitor_lock:
+            should_notify = self.running and not self._completion_notified
+            self.running = False
+            if should_notify:
+                self._completion_notified = True
+
+        if should_notify and on_complete:
+            on_complete()
     
     def _udp_raw_worker(self, thread_id, target_ip, port, total_length, total_seconds, 
                         continuous, interface, source_ip, data, pseudo_header_template, app_log):
@@ -249,9 +275,12 @@ class Sattack:
             'start_time': 0,
             'total_bytes': 0
         }
+        self._monitor_lock = threading.Lock()
+        self._completion_notified = False
     
-    def start_dns_attack(self, target_ip, duration, continuous, interface, app_log):
+    def start_dns_attack(self, target_ip, duration, continuous, interface, app_log, on_complete=None):
         self.running = True
+        self._completion_notified = False
         self.stats = {
             'total_sent': 0,
             'start_time': time.time(),
@@ -263,6 +292,7 @@ class Sattack:
         app_log(f"Target: {target_ip}:53")
         app_log(f"Interface: {interface}")
         
+        worker_threads = []
         for i in range(num_threads):
             thread = threading.Thread(
                 target=self._dns_scapy_worker,
@@ -271,8 +301,30 @@ class Sattack:
             )
             thread.start()
             self.threads.append(thread)
+            worker_threads.append(thread)
+
+        monitor_thread = threading.Thread(
+            target=self._monitor_dns_workers,
+            args=(worker_threads, on_complete),
+            daemon=True
+        )
+        monitor_thread.start()
+        self.threads.append(monitor_thread)
         
         return True
+
+    def _monitor_dns_workers(self, worker_threads, on_complete=None):
+        for thread in worker_threads:
+            thread.join()
+
+        with self._monitor_lock:
+            should_notify = self.running and not self._completion_notified
+            self.running = False
+            if should_notify:
+                self._completion_notified = True
+
+        if should_notify and on_complete:
+            on_complete()
     
     def _dns_scapy_worker(self, thread_id, target_ip, total_seconds, continuous, interface, app_log):
         sent = 0
@@ -1250,13 +1302,7 @@ class Gotcha:
         self.custom_packet_count = ttk.Entry(row5, width=10, font=('Arial', 9))
         self.custom_packet_count.pack(side='left', padx=2)
         self.custom_packet_count.insert(0, "60")
-        
-        # Непрерывный режим
-        row6 = ttk.Frame(params_frame)
-        row6.pack(fill='x', padx=5, pady=5)
-        self.custom_continuous = tk.BooleanVar()
-        ttk.Checkbutton(row6, text="Непрерывный режим", 
-                       variable=self.custom_continuous).pack(side='left', padx=5)
+        ttk.Label(row5, text="0 = бесконечно").pack(side='left', padx=6)
         
         # Фрейм для дополнительных опций (случайный IP/MAC)
         self.custom_options_frame = ttk.Frame(params_frame)
@@ -1430,10 +1476,13 @@ class Gotcha:
             port = int(self.custom_port.get()) if protocol in ["TCP", "UDP"] else 0
             packet_size = int(self.custom_packet_size.get())
             duration = int(self.custom_packet_count.get())
-            continuous = self.custom_continuous.get()
+            continuous = duration == 0
             interface = self.custom_interface.get()
             random_ip = self.custom_random_ip.get()
             random_mac = self.custom_random_mac.get()
+
+            if duration < 0:
+                raise ValueError("Время атаки не может быть отрицательным")
             
             # Сохраняем тип атаки
             self.current_attack_type = protocol
@@ -1450,7 +1499,8 @@ class Gotcha:
             if protocol == "UDP":
                 self.raw_attack.start_udp_attack(
                     target_ip, port, packet_size, duration, 
-                    continuous, interface, self._log_custom
+                    continuous, interface, self._log_custom,
+                    on_complete=lambda: self.root.after(0, self.on_internal_finished)
                 )
             elif protocol == "ICMP":
                 exe_path = find_exe("icmp.exe")
@@ -1465,8 +1515,6 @@ class Gotcha:
                 except:
                     src_ip = "192.168.1.100"
                 threads = 4
-                if continuous:
-                    duration = 0
                 args = [exe_path, src_ip, target_ip, str(threads), str(duration)]
                 if random_ip:
                     args.append("--random-ip")
@@ -1493,8 +1541,6 @@ class Gotcha:
                 except:
                     src_ip = "192.168.1.100"
                 threads = 4
-                if continuous:
-                    duration = 0
                 args = [exe_path, src_ip, target_ip, str(port), str(threads), str(duration)]
                 if random_ip:
                     args.append("--random-ip")
@@ -1521,8 +1567,6 @@ class Gotcha:
                 except:
                     src_ip = "192.168.1.100"
                 threads = 4
-                if continuous:
-                    duration = 0
                 args = [exe_path, src_ip, target_ip, str(threads), str(duration)]
                 if random_ip:
                     args.append("--random-ip")
@@ -1538,7 +1582,8 @@ class Gotcha:
                 self.custom_external_thread.start()
             elif protocol == "DNS":
                 self.scapy_attack.start_dns_attack(
-                    target_ip, duration, continuous, interface, self._log_custom
+                    target_ip, duration, continuous, interface, self._log_custom,
+                    on_complete=lambda: self.root.after(0, self.on_internal_finished)
                 )
             
             # Для внутренних атак запускаем обновление статистики
@@ -1565,6 +1610,42 @@ class Gotcha:
     def _log_custom(self, message):
         self.custom_log.insert('end', f"{message}\n")
         self.custom_log.see('end')
+
+    def _show_internal_results(self, final_stats):
+        if not final_stats:
+            return
+
+        total_packets = final_stats['total_sent']
+        total_bytes = final_stats['total_bytes']
+        total_time = time.time() - final_stats['start_time']
+        self.custom_log.insert('end', "\n--- Results ---\n")
+        self.custom_log.insert('end', f"Total packets sent: {total_packets}\n")
+        self.custom_log.insert('end', f"Duration: {total_time*1000:.0f} ms\n")
+        if total_time > 0:
+            self.custom_log.insert('end', f"Avg rate: {int(total_packets/total_time)} pps\n")
+        self.custom_log.insert('end', f"Total data: {total_bytes} bytes\n")
+        if total_time > 0:
+            self.custom_log.insert('end', f"Throughput: {(total_bytes*8/total_time/1e6):.2f} Mbps\n")
+
+    def on_internal_finished(self):
+        if not self.custom_attack_running or self.current_attack_type not in ["UDP", "DNS"]:
+            return
+
+        final_stats = None
+        if self.current_attack_type == "UDP":
+            with self.raw_attack.stats_lock:
+                final_stats = self.raw_attack.stats.copy()
+        elif self.current_attack_type == "DNS":
+            with self.scapy_attack.stats_lock:
+                final_stats = self.scapy_attack.stats.copy()
+
+        self._show_internal_results(final_stats)
+        self.custom_attack_running = False
+        self.custom_start_btn.config(state='normal')
+        self.custom_stop_btn.config(state='disabled')
+        self.status_var.set("DoS атака завершена")
+        self.current_attack_type = None
+        self.external_infinite = False
     
     
     def on_external_finished(self):
@@ -1608,19 +1689,7 @@ class Gotcha:
                 final_stats = self.scapy_attack.stop()
             else:
                 final_stats = None
-            
-            if final_stats:
-                total_packets = final_stats['total_sent']
-                total_bytes = final_stats['total_bytes']
-                total_time = time.time() - final_stats['start_time']
-                self.custom_log.insert('end', "\n--- Results ---\n")
-                self.custom_log.insert('end', f"Total packets sent: {total_packets}\n")
-                self.custom_log.insert('end', f"Duration: {total_time*1000:.0f} ms\n")
-                if total_time > 0:
-                    self.custom_log.insert('end', f"Avg rate: {int(total_packets/total_time)} pps\n")
-                self.custom_log.insert('end', f"Total data: {total_bytes} bytes\n")
-                if total_time > 0:
-                    self.custom_log.insert('end', f"Throughput: {(total_bytes*8/total_time/1e6):.2f} Mbps\n")
+            self._show_internal_results(final_stats)
 
         # Сбрасываем флаги
         self.custom_attack_running = False
